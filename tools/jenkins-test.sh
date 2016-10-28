@@ -71,12 +71,15 @@ stop_node() {
 	echo
 }
 
+# return the most recent N directories, all if N is not a number
 summaries_dir() {
-	if [ `uname` = "Darwin" ]; then
-		echo `ls -dt ${1} | head -n ${2}`
-	else
-		echo `eval ls -d ${1} --sort time | head -n ${2}`
-	fi
+	N=$1; shift
+	DIRS=($(ls -td "$@"))
+	case "$N" in
+	[0-9]*) ;;
+	*)      N=1;;
+	esac
+	echo "${DIRS[@]:0:$N}"
 }
 
 run_small_tests() {
@@ -86,7 +89,7 @@ run_small_tests() {
 	echo "Add option -s false to skip embeded common tests"
 	make ct
 	SMALL_SUMMARIES_DIRS=${BASE}/apps/ejabberd/logs/ct_run*
-	SMALL_SUMMARIES_DIR=$(summaries_dir ${SMALL_SUMMARIES_DIRS} 1)
+	SMALL_SUMMARIES_DIR=$(summaries_dir 1 ${SMALL_SUMMARIES_DIRS})
 	${TOOLS}/summarise-ct-results ${SMALL_SUMMARIES_DIR}
 }
 
@@ -132,7 +135,7 @@ run_tests() {
 	done
 
 	SUMMARIES_DIRS=${BASE}'/test/ejabberd_tests/ct_report/ct_run*'
-	SUMMARIES_DIR=$(summaries_dir ${SUMMARIES_DIRS} ${RAN_TESTS})
+	SUMMARIES_DIR=$(summaries_dir "${RAN_TESTS}" ${SUMMARIES_DIRS})
 	${TOOLS}/summarise-ct-results ${SUMMARIES_DIR}
 	BIG_STATUS=$?
 
