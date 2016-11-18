@@ -1,16 +1,27 @@
 #!/bin/bash
 
+## jenkins-test.sh - tools/travis-test.sh without the TTY dependencies
+
 PRESET="internal_mnesia"
 SMALL_TESTS="true"
 COVER_ENABLED="true"
+TESTSPEC="jenkins.spec"
+START_AND_QUIT=
 
-while getopts ":p::s::c:" opt; do
+while getopts ":Qp:s:t:c:" opt; do
   case $opt in
     p)
       PRESET=$OPTARG
       ;;
     s)
       SMALL_TESTS=$OPTARG
+      ;;
+    t)
+      TESTSPEC=$OPTARG
+      ;;
+    Q)
+      SMALL_TESTS=false
+      START_AND_QUIT=yes
       ;;
     c)
       COVER_ENABLED=$OPTARG
@@ -27,7 +38,7 @@ while getopts ":p::s::c:" opt; do
 done
 
 source tools/travis-common-vars.sh
-source tools/travis-helpers.sh
+#source tools/travis-helpers.sh
 
 if [ "$TRAVIS_SECURE_ENV_VARS" == 'true' ]; then
   CT_REPORTS=$(ct_reports_dir)
@@ -106,9 +117,9 @@ maybe_run_small_tests() {
 run_test_preset() {
 #	tools/print-dots.sh start
 	if [ "$COVER_ENABLED" = "true" ]; then
-		make cover_test_preset TESTSPEC=jenkins.spec PRESET=$PRESET
+		make cover_test_preset TESTSPEC=$TESTSPEC PRESET=$PRESET
 	else
-		make test_preset TESTSPEC=jenkins.spec PRESET=$PRESET
+		make test_preset TESTSPEC=$TESTSPEC PRESET=$PRESET
 	fi
 #	tools/print-dots.sh stop
 }
@@ -125,6 +136,7 @@ run_tests() {
 	for node in ${NODES[@]}; do
 		start_node $node;
 	done
+	test -n "$START_AND_QUIT" && { echo quitting; exit 0; }
 
 	run_test_preset
 
