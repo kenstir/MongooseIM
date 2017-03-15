@@ -38,8 +38,8 @@
          bounce_offline_message/4,
          disconnect_removed_user/3,
          get_user_resources/2,
-         set_presence/7,
-         unset_presence/6,
+         set_presence/8,
+         unset_presence/7,
          close_session_unset_presence/6,
          get_unique_sessions_number/0,
          get_total_sessions_number/0,
@@ -56,7 +56,8 @@
          get_session/3,
          get_session_ip/3,
          get_user_present_resources/2,
-         get_raw_sessions/2
+         get_raw_sessions/2,
+         get_user_present_pids/2
         ]).
 
 %% Hook handlers
@@ -102,7 +103,7 @@
               ses_tuple/0,
               backend/0,
               close_reason/0
-            ]).
+             ]).
 
 %% default value for the maximum number of user connections
 -define(MAX_USER_SESSIONS, 100).
@@ -129,10 +130,11 @@ start_link() ->
 route(From, To, Packet) ->
     case (catch do_route(From, To, Packet)) of
         {'EXIT', Reason} ->
-            ?ERROR_MSG("error when routing from=~ts to=~ts in module=~p, reason=~p, packet=~ts, stack_trace=~p",
-                [jid:to_binary(From), jid:to_binary(To),
-                    ?MODULE, Reason, exml:to_binary(Packet),
-                    erlang:get_stacktrace()]);
+            ?ERROR_MSG("error when routing from=~ts to=~ts in module=~p, reason=~p, "
+                       "packet=~ts, stack_trace=~p",
+                       [jid:to_binary(From), jid:to_binary(To),
+                        ?MODULE, Reason, exml:to_binary(Packet),
+                        erlang:get_stacktrace()]);
         _ -> ok
     end.
 
@@ -161,11 +163,11 @@ open_session(SID, User, Server, Resource, Priority, Info) ->
     ok.
 
 -spec close_session(SID, User, Server, Resource, Reason) -> ok when
-    SID :: 'undefined' | sid(),
-    User :: ejabberd:user(),
-    Server :: ejabberd:server(),
-    Resource :: ejabberd:resource(),
-    Reason :: close_reason().
+      SID :: 'undefined' | sid(),
+      User :: ejabberd:user(),
+      Server :: ejabberd:server(),
+      Resource :: ejabberd:resource(),
+      Reason :: close_reason().
 close_session(SID, User, Server, Resource, Reason) ->
     LUser = jid:nodeprep(User),
     LServer = jid:nameprep(Server),
@@ -293,7 +295,9 @@ get_raw_sessions(User, Server) ->
     clean_session_list(
       ?SM_BACKEND:get_sessions(jid:nodeprep(User), jid:nameprep(Server))).
 
--spec set_presence(SID, User, Server, Resource, Prio, Presence, Info) -> ok when
+-spec set_presence(Acc, SID, User, Server, Resource, Prio, Presence, Info) -> Acc1 when
+      Acc :: mongoose_acc:t(),
+      Acc1 :: mongoose_acc:t(),
       SID :: 'undefined' | sid(),
       User :: ejabberd:user(),
       Server :: ejabberd:server(),
@@ -301,23 +305,25 @@ get_raw_sessions(User, Server) ->
       Prio :: 'undefined' | integer(),
       Presence :: any(),
       Info :: 'undefined' | [any()].
-set_presence(SID, User, Server, Resource, Priority, Presence, Info) ->
+set_presence(Acc, SID, User, Server, Resource, Priority, Presence, Info) ->
     set_session(SID, User, Server, Resource, Priority, Info),
-    ejabberd_hooks:run(set_presence_hook, jid:nameprep(Server),
+    ejabberd_hooks:run_fold(set_presence_hook, jid:nameprep(Server), Acc,
                        [User, Server, Resource, Presence]).
 
 
--spec unset_presence(SID, User, Server, Resource, Status, Info) -> ok when
+-spec unset_presence(Acc, SID, User, Server, Resource, Status, Info) -> Acc1 when
+      Acc :: mongoose_acc:t(),
+      Acc1 :: mongoose_acc:t(),
       SID :: 'undefined' | sid(),
       User :: ejabberd:user(),
       Server :: ejabberd:server(),
       Resource :: ejabberd:resource(),
       Status :: any(),
       Info :: 'undefined' | [any()].
-unset_presence(SID, User, Server, Resource, Status, Info) ->
+unset_presence(Acc, SID, User, Server, Resource, Status, Info) ->
     set_session(SID, User, Server, Resource, undefined, Info),
     LServer = jid:nameprep(Server),
-    ejabberd_hooks:run(unset_presence_hook, LServer,
+    ejabberd_hooks:run_fold(unset_presence_hook, LServer, Acc,
                        [jid:nodeprep(User), LServer,
                         jid:resourceprep(Resource), Status]).
 
@@ -618,16 +624,16 @@ do_route_no_resource_presence_prv(From, To, Packet, Type, Reason) ->
       To :: ejabberd:jid(),
       Packet :: jlib:xmlel().
 do_route_no_resource_presence(<<"subscribe">>, From, To, Packet) ->
-        Reason = xml:get_path_s(Packet, [{elem, <<"status">>}, cdata]),
-        do_route_no_resource_presence_prv(From, To, Packet, subscribe, Reason);
+    Reason = xml:get_path_s(Packet, [{elem, <<"status">>}, cdata]),
+    do_route_no_resource_presence_prv(From, To, Packet, subscribe, Reason);
 do_route_no_resource_presence(<<"subscribed">>, From, To, Packet) ->
-        do_route_no_resource_presence_prv(From, To, Packet, subscribed, <<>>);
+    do_route_no_resource_presence_prv(From, To, Packet, subscribed, <<>>);
 do_route_no_resource_presence(<<"unsubscribe">>, From, To, Packet) ->
-        do_route_no_resource_presence_prv(From, To, Packet, unsubscribe, <<>>);
+    do_route_no_resource_presence_prv(From, To, Packet, unsubscribe, <<>>);
 do_route_no_resource_presence(<<"unsubscribed">>, From, To, Packet) ->
-        do_route_no_resource_presence_prv(From, To, Packet, unsubscribed, <<>>);
+    do_route_no_resource_presence_prv(From, To, Packet, unsubscribed, <<>>);
 do_route_no_resource_presence(_, _, _, _) ->
-        true.
+    true.
 
 
 -spec do_route_no_resource(Name, Type, From, To, Packet) -> Result when
@@ -638,26 +644,26 @@ do_route_no_resource_presence(_, _, _, _) ->
       Packet :: jlib:xmlel(),
       Result ::ok | stop | todo | pid() | {error, lager_not_running} | {process_iq, _, _, _}.
 do_route_no_resource(<<"presence">>, Type, From, To, Packet) ->
-        case do_route_no_resource_presence(Type, From, To, Packet) of
-            true ->
+    case do_route_no_resource_presence(Type, From, To, Packet) of
+        true ->
             PResources = get_user_present_resources(To#jid.luser, To#jid.lserver),
-                    lists:foreach(
-                      fun({_, R}) ->
-      do_route(From, jid:replace_resource(To, R), Packet)
+            lists:foreach(
+              fun({_, R}) ->
+                      do_route(From, jid:replace_resource(To, R), Packet)
               end, PResources);
-            false ->
-                ok
-        end;
+        false ->
+            ok
+    end;
 do_route_no_resource(<<"message">>, _, From, To, Packet) ->
-        route_message(From, To, Packet);
+    route_message(From, To, Packet);
 do_route_no_resource(<<"iq">>, _, From, To, Packet) ->
-        process_iq(From, To, Packet);
+    process_iq(From, To, Packet);
 do_route_no_resource(<<"broadcast">>, _, From, To, Packet) ->
-    % Backward compatibility
+    %% Backward compatibility
     ejabberd_hooks:run(sm_broadcast, To#jid.lserver, [From, To, Packet]),
     broadcast_packet(From, To, Packet);
 do_route_no_resource(_, _, _, _, _) ->
-        ok.
+    ok.
 
 -spec do_route_offline(Name, Type, From, To, Packet) -> ok | stop when
       Name :: 'undefined' | binary(),
@@ -676,17 +682,17 @@ do_route_offline(<<"message">>, _, From, To, Packet)  ->
             ok
     end;
 do_route_offline(<<"iq">>, <<"error">>, _From, _To, _Packet) ->
-        ok;
+    ok;
 do_route_offline(<<"iq">>, <<"result">>, _From, _To, _Packet) ->
-        ok;
+    ok;
 do_route_offline(<<"iq">>, _, From, To, Packet) ->
-        Err = jlib:make_error_reply(Packet, ?ERR_SERVICE_UNAVAILABLE),
-        ejabberd_router:route(To, From, Err);
+    Err = jlib:make_error_reply(Packet, ?ERR_SERVICE_UNAVAILABLE),
+    ejabberd_router:route(To, From, Err);
 do_route_offline(_, _, _, _, _) ->
-        ?DEBUG("packet droped~n", []),
-        ok.
+    ?DEBUG("packet droped~n", []),
+    ok.
 
-% Backward compatibility
+%% Backward compatibility
 -spec broadcast_packet(From :: ejabberd:jid(), To :: ejabberd:jid(), Packet :: jlib:xmlel()) -> ok.
 broadcast_packet(From, To, Packet) ->
     #jid{user = User, server = Server} = To,
@@ -719,15 +725,16 @@ is_privacy_allow(From, To, Packet) ->
       From :: ejabberd:jid(),
       To :: ejabberd:jid(),
       Packet :: jlib:xmlel(),
-      PrivacyList :: list().
+      PrivacyList :: #userlist{}.
 is_privacy_allow(From, To, Packet, PrivacyList) ->
     User = To#jid.user,
     Server = To#jid.server,
-    allow == ejabberd_hooks:run_fold(
-               privacy_check_packet, Server,
-               allow,
-               [User, Server, PrivacyList,
-                {From, To, Packet}, in]).
+    ?TEMPORARY,
+    Acc = mongoose_acc:from_element(Packet),
+    Acc1 = mongoose_acc:put(from_jid, From, Acc),
+    {_, Res} = mongoose_privacy:privacy_check_packet(Acc1, Server, User, PrivacyList,
+                                                     To, in),
+    allow == Res.
 
 
 -spec route_message(From, To, Packet) -> ok | stop when
@@ -744,7 +751,7 @@ route_message(From, To, Packet) ->
               %% Route messages to all priority that equals the max, if
               %% positive
               fun({Prio, Pid}) when Prio == Priority ->
-                      % we will lose message if PID is not alive
+                 %% we will lose message if PID is not alive
                       Pid ! {route, From, To, Packet};
                  %% Ignore other priority:
                  ({_Prio, _Pid}) ->
@@ -819,7 +826,7 @@ get_user_present_pids(LUser, LServer) ->
 
 -spec get_user_present_resources(LUser :: ejabberd:user(),
                                  LServer :: ejabberd:server()
-                                 ) -> [{priority(), binary()}].
+                                ) -> [{priority(), binary()}].
 get_user_present_resources(LUser, LServer) ->
     Ss = ?SM_BACKEND:get_sessions(LUser, LServer),
     [{S#session.priority, element(3, S#session.usr)} ||

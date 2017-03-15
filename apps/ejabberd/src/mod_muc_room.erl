@@ -871,6 +871,7 @@ broadcast_room_packet(From, FromNick, Role, Packet, StateData) ->
         drop ->
             next_normal_state(StateData);
         FilteredPacket ->
+            ejabberd_hooks:run(room_send_packet, StateData#state.host, [FilteredPacket, EventData]),
             RouteFrom = jid:replace_resource(StateData#state.jid,
                                              FromNick),
             lists:foreach(fun({_LJID, Info}) ->
@@ -1663,7 +1664,7 @@ add_online_user(JID, Nick, Role, StateData) ->
         _ ->
             ok
     end,
-    StateData#state{users = Users, sessions = Sessions}.
+    notify_users_modified(StateData#state{users = Users, sessions = Sessions}).
 
 
 -spec remove_online_user(ejabberd:jid(), state()) -> state().
@@ -1689,7 +1690,7 @@ remove_online_user(JID, StateData, Reason) ->
     end,
     Users = dict:erase(LJID, StateData#state.users),
 
-    StateData#state{users = Users, sessions = Sessions}.
+    notify_users_modified(StateData#state{users = Users, sessions = Sessions}).
 
 
 -spec filter_presence(jlib:xmlel()) -> jlib:xmlel().
@@ -1733,7 +1734,7 @@ add_user_presence(JID, Presence, StateData) ->
       fun(#user{} = User) ->
               User#user{last_presence = FPresence}
       end, StateData#state.users),
-    StateData#state{users = Users}.
+    notify_users_modified(StateData#state{users = Users}).
 
 
 -spec add_user_presence_un(ejabberd:simple_jid() | ejabberd:jid(), jlib:xmlel(),
@@ -1747,7 +1748,7 @@ add_user_presence_un(JID, Presence, StateData) ->
       fun(#user{} = User) ->
               User#user{last_presence = FPresence, role = none}
       end, StateData#state.users),
-    StateData#state{users = Users}.
+    notify_users_modified(StateData#state{users = Users}).
 
 
 -spec is_nick_exists(mod_muc:nick(), state()) -> boolean().
@@ -2201,7 +2202,7 @@ foreach_user(F, #state{users=Users}) ->
 erase_matched_users(JID, StateData=#state{users=Users, sessions=Sessions}) ->
     LJID = jid:to_lower(JID),
     {NewUsers, NewSessions} = erase_matched_users_dict(LJID, Users, Sessions),
-    StateData#state{users=NewUsers, sessions=NewSessions}.
+    notify_users_modified(StateData#state{users=NewUsers, sessions=NewSessions}).
 
 
 -spec erase_matched_users_dict('error' | ejabberd:simple_jid(),
@@ -2223,7 +2224,7 @@ erase_matched_users_dict(LJID, Users, Sessions) ->
 update_matched_users(F, JID, StateData=#state{users=Users}) ->
     LJID = jid:to_lower(JID),
     NewUsers = update_matched_users_dict(F, LJID, Users),
-    StateData#state{users=NewUsers}.
+    notify_users_modified(StateData#state{users=NewUsers}).
 
 
 -spec update_matched_users_dict(fun((user()) -> user()),
@@ -2440,7 +2441,7 @@ change_nick(JID, Nick, StateData) ->
       end, StateData#state.users),
     {ok, JIDs} = dict:find(OldNick, StateData#state.sessions),
     Sessions = dict:erase(OldNick, dict:store(Nick, JIDs, StateData#state.sessions)),
-    NewStateData = StateData#state{users = Users, sessions = Sessions},
+    NewStateData = notify_users_modified(StateData#state{users = Users, sessions = Sessions}),
     send_nick_changing(JID, OldNick, NewStateData),
     add_to_log(nickchange, {OldNick, Nick}, StateData),
     NewStateData.
@@ -3460,6 +3461,7 @@ get_config(Lang, StateData, From) ->
         {N, integer_to_binary(N)};
         _ -> {0, <<"none">>}
     end,
+
     Res =
     [#xmlel{name = <<"title">>,
             children = [#xmlcdata{content = <<(translate:translate(Lang, <<"Configuration of room ">>))/binary,
@@ -4793,3 +4795,7 @@ stringxfield(Label, Var, Val, Lang) ->
 
 privatexfield(Label, Var, Val, Lang) ->
     xfield(<<"text-private">>, Label, Var, Val, Lang).
+
+notify_users_modified(#state{server_host = Host, jid = JID, users = Users} = State) ->
+    mod_muc_log:set_room_occupants(Host, self(), JID, dict_to_values(Users)),
+    State.

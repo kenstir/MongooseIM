@@ -30,6 +30,7 @@
 {suites, "tests", metrics_roster_SUITE}.
 {suites, "tests", metrics_register_SUITE}.
 {suites, "tests", metrics_session_SUITE}.
+{suites, "tests", mod_aws_sns_SUITE}.
 {suites, "tests", mod_blocking_SUITE}.
 {suites, "tests", mod_http_notification_SUITE}.
 {suites, "tests", mod_http_upload_SUITE}.
@@ -48,6 +49,8 @@
 {suites, "tests", privacy_SUITE}.
 {suites, "tests", private_SUITE}.
 {suites, "tests", pubsub_SUITE}.
+{suites, "tests", push_SUITE}.
+{suites, "tests", push_integration_SUITE}.
 {suites, "tests", push_pubsub_SUITE}.
 {suites, "tests", rest_SUITE}.
 {suites, "tests", rest_client_SUITE}.
