@@ -63,11 +63,7 @@ handle_nested_opts(Key, RootOpts, Default, Deps) ->
 
 -spec parse_opts(Type :: pm | muc, Opts :: proplists:proplist(), deps()) -> deps().
 parse_opts(Type, Opts, Deps) ->
-    CoreMod =
-        case Type of
-            pm -> mod_mam;
-            muc -> mod_mam_muc
-        end,
+    CoreMod = mam_type_to_core_mod(Type),
 
     CoreModOpts =
         lists:filtermap(
@@ -76,14 +72,22 @@ parse_opts(Type, Opts, Deps) ->
                       none -> false;
                       Opt -> {true, Opt}
                   end
-          end,
-          [add_archived_element, is_archivable_message, host, full_text_search]),
+          end, valid_core_mod_opts(CoreMod)),
 
     WithCoreDeps = add_dep(CoreMod, CoreModOpts, Deps),
     Backend = proplists:get_value(backend, Opts, odbc),
 
     parse_backend_opts(Backend, Type, Opts, WithCoreDeps).
 
+-spec mam_type_to_core_mod(atom()) -> module().
+mam_type_to_core_mod(pm) -> mod_mam;
+mam_type_to_core_mod(muc) -> mod_mam_muc.
+
+-spec valid_core_mod_opts(module()) -> [atom()].
+valid_core_mod_opts(mod_mam) ->
+    [add_archived_element, is_archivable_message, full_text_search, archive_groupchats];
+valid_core_mod_opts(mod_mam_muc) ->
+    [add_archived_element, is_archivable_message, host, full_text_search].
 
 -spec parse_backend_opts(odbc | cassandra | riak, Type :: pm | muc,
                          Opts :: proplists:proplist(), deps()) -> deps().
@@ -159,8 +163,8 @@ add_default_odbc_opts(Opts) ->
       [{cache_users, true}, {async_writer, true}]).
 
 
--spec parse_backend_opt(Option :: {module(), term()}, Type :: pm | muc,
-                        module(), module(), deps()) -> deps().
+-spec parse_backend_opt(Type :: pm | muc, module(), module(),
+                        Option :: {module(), term()}, deps()) -> deps().
 parse_backend_opt(Type, ModODBCArch, ModAsyncWriter, Option, Deps) ->
     case Option of
         {cache_users, true} ->
@@ -176,6 +180,8 @@ parse_backend_opt(Type, ModODBCArch, ModAsyncWriter, Option, Deps) ->
         {async_writer, true} ->
             DepsWithNoWriter = add_dep(ModODBCArch, [no_writer], Deps),
             add_dep(ModAsyncWriter, [Type], DepsWithNoWriter);
+        {async_writer_odbc_pool, PoolName} ->
+            add_dep(ModAsyncWriter, [{odbc_pool, PoolName}], Deps);
         _ -> Deps
     end.
 

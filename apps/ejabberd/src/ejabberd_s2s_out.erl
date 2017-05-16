@@ -873,6 +873,7 @@ code_change(_OldVsn, StateName, StateData, _Extra) ->
 %%          {stop, Reason, NewStateData}
 %%----------------------------------------------------------------------
 handle_info({send_text, Text}, StateName, StateData) ->
+    ?ERROR_MSG("{s2s_out:send_text, Text}: ~p~n", [{send_text, Text}]), % is it ever called?
     send_text(StateData, Text),
     cancel_timer(StateData#state.timer),
     Timer = erlang:start_timer(?S2STIMEOUT, self(), []),
@@ -965,8 +966,12 @@ send_text(StateData, Text) ->
     ejabberd_socket:send(StateData#state.socket, Text).
 
 
--spec send_element(state(), jlib:xmlel()) -> 'ok'.
-send_element(StateData, El) ->
+-spec send_element(state(), jlib:xmlel()|mongoose_acc:t()) -> 'ok'.
+send_element(StateData, #xmlel{} = El) ->
+    ?DEPRECATED,
+    send_text(StateData, exml:to_binary(El));
+send_element(StateData, Acc) ->
+    El = mongoose_acc:get(to_send, Acc),
     send_text(StateData, exml:to_binary(El)).
 
 
@@ -982,17 +987,18 @@ send_queue(StateData, Q) ->
 
 
 %% @doc Bounce a single message (xmlel)
--spec bounce_element(El :: jlib:xmlel(), Error :: jlib:xmlel()) -> 'ok'.
-bounce_element(El, Error) ->
-    #xmlel{attrs = Attrs} = El,
-    case xml:get_attr_s(<<"type">>, Attrs) of
+-spec bounce_element(Acc :: mongoose_acc:t(), Error :: jlib:xmlel()) -> 'ok'.
+bounce_element(Acc, Error) ->
+    case mongoose_acc:get(type, Acc) of
         <<"error">> -> ok;
         <<"result">> -> ok;
         _ ->
+            From = mongoose_acc:get(from_jid, Acc),
+            To = mongoose_acc:get(to_jid, Acc),
+            El = mongoose_acc:get(element, Acc),
             Err = jlib:make_error_reply(El, Error),
-            From = jid:from_binary(xml:get_tag_attr_s(<<"from">>, El)),
-            To = jid:from_binary(xml:get_tag_attr_s(<<"to">>, El)),
-            ejabberd_router:route(To, From, Err)
+            Acc1 = mongoose_acc:put(to_send, Err, Acc),
+            ejabberd_router:route(To, From, Acc1)
     end.
 
 
@@ -1111,8 +1117,7 @@ get_addr_port(Server) ->
         {ok, #hostent{h_addr_list = AddrList}} ->
             %% Probabilities are not exactly proportional to weights
             %% for simplicity (higher weigths are overvalued)
-            {A1, A2, A3} = now(),
-            random:seed(A1, A2, A3),
+            random:seed(randoms:good_seed()),
             case (catch lists:map(
                           fun({Priority, Weight, Port, Host}) ->
                                   N = case Weight of
@@ -1286,7 +1291,7 @@ wait_before_reconnect(StateData) ->
                 undefined_delay ->
                     %% The initial delay is random between 1 and 15 seconds
                     %% Return a random integer between 1000 and 15000
-                    {_, _, MicroSecs} = now(),
+                    {_, _, MicroSecs} = p1_time_compat:timestamp(),
                     (MicroSecs rem 14000) + 1000;
                 D1 ->
                     %% Duplicate the delay with each successive failed
@@ -1335,15 +1340,24 @@ fsm_limit_opts() ->
 %% @doc Get IPs predefined for a given s2s domain in the configuration
 -spec get_predefined_addresses(atom()) -> [{inet:ip_address(), inet:port_number()}].
 get_predefined_addresses(Server) ->
-    case ejabberd_config:get_local_option({s2s_addr, Server}) of
-        undefined ->
-            [];
-        {{_, _, _, _}, Port} = IP4Port when is_integer(Port) ->
-            [IP4Port];
-        {{_, _, _, _, _, _, _, _}, Port} = IP6Port when is_integer(Port) ->
-            [IP6Port];
-        {_, _, _, _} = IP4 ->
-            [{IP4, outgoing_s2s_port()}];
-        {_, _, _, _, _, _, _, _} = IP6 ->
-            [{IP6, outgoing_s2s_port()}]
-    end.
+    S2SAddr = ejabberd_config:get_local_option({s2s_addr, Server}),
+    do_get_predefined_addresses(S2SAddr).
+
+-spec do_get_predefined_addresses(undefined | string() | inet:ip_address() |
+                                  {string() | inet:ip_address(), non_neg_integer()}) ->
+                                         [{inet:ip_address(), non_neg_integer()}].
+do_get_predefined_addresses(undefined) ->
+    [];
+do_get_predefined_addresses({{_, _, _, _}, Port} = IP4Port) when is_integer(Port) ->
+    [IP4Port];
+do_get_predefined_addresses({{_, _, _, _, _, _, _, _}, Port} = IP6Port) when is_integer(Port) ->
+    [IP6Port];
+do_get_predefined_addresses({_, _, _, _} = IP4) ->
+    [{IP4, outgoing_s2s_port()}];
+do_get_predefined_addresses({_, _, _, _, _, _, _, _} = IP6) ->
+    [{IP6, outgoing_s2s_port()}];
+do_get_predefined_addresses({List, Port}) when is_list(List), is_integer(Port) ->
+    {ok, Addr} = inet:parse_strict_address(List),
+    do_get_predefined_addresses({Addr, Port});
+do_get_predefined_addresses(List) when is_list(List) ->
+    do_get_predefined_addresses({List, outgoing_s2s_port()}).

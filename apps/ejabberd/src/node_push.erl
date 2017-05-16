@@ -20,7 +20,7 @@
 -export([init/3, terminate/2, options/0, features/0,
          create_node_permission/6, create_node/2, delete_node/1,
          purge_node/2, subscribe_node/8, unsubscribe_node/4,
-         publish_item/8, delete_item/4, remove_extra_items/3,
+         publish_item/9, delete_item/4, remove_extra_items/3,
          get_entity_affiliations/2, get_node_affiliations/1,
          get_affiliation/2, set_affiliation/3,
          get_entity_subscriptions/2, get_node_subscriptions/1,
@@ -85,7 +85,8 @@ subscribe_node(Nidx, Sender, Subscriber, AccessModel,
 unsubscribe_node(Nidx, Sender, Subscriber, SubId) ->
     node_flat:unsubscribe_node(Nidx, Sender, Subscriber, SubId).
 
-publish_item(Nidx, Publisher, Model, MaxItems, ItemId, ItemPublisher, Payload, PublishOptions) ->
+publish_item(ServerHost, Nidx, Publisher, Model, _MaxItems, _ItemId, _ItemPublisher, Payload,
+             PublishOptions) ->
     SubKey = jid:to_lower(Publisher),
     GenKey = jid:to_bare(SubKey),
     GenState = get_state(Nidx, GenKey),
@@ -94,29 +95,28 @@ publish_item(Nidx, Publisher, Model, MaxItems, ItemId, ItemPublisher, Payload, P
                    _ -> get_state(Nidx, SubKey)
                end,
     Affiliation = SubState#pubsub_state.affiliation,
+    ElPayload = [El || #xmlel{} = El <- Payload],
 
     case is_allowed_to_publish(Model, Affiliation) of
         true ->
-            do_publish_item(Nidx, Publisher, Model, MaxItems, ItemId, ItemPublisher,
-                            Payload, PublishOptions);
+            do_publish_item(ServerHost, PublishOptions, ElPayload);
         false ->
             {error, ?ERR_FORBIDDEN}
     end.
 
-do_publish_item(_Nidx, _Publisher, _Model, _MaxItems, _ItemId, _ItemPublisher,
-                [#xmlel{name = <<"notification">>} | _] = Notifications, PublishOptions) ->
-    Host = ?MYNAME,
+do_publish_item(ServerHost, PublishOptions,
+                [#xmlel{name = <<"notification">>} | _] = Notifications) ->
     case catch parse_form(PublishOptions) of
         #{<<"device_id">> := _, <<"service">> := _} = OptionMap ->
             NotificationRawForms = [exml_query:subelement(El, <<"x">>) || El <- Notifications],
             NotificationForms = [parse_form(Form) || Form <- NotificationRawForms],
-            ejabberd_hooks:run(push_notifications, Host, [Host, NotificationForms, OptionMap]),
+            ejabberd_hooks:run(push_notifications, ServerHost,
+                               [ServerHost, NotificationForms, OptionMap]),
             {result, default};
         _ ->
             {error, mod_pubsub:extended_error(?ERR_CONFLICT, <<"precondition-not-met">>)}
     end;
-do_publish_item(_Nidx, _Publisher, _Model, _MaxItems, _ItemId, _ItemPublisher,
-                _Payload, _PublishOptions) ->
+do_publish_item(_ServerHost, _PublishOptions, _Payload) ->
     {error, ?ERR_BAD_REQUEST}.
 
 remove_extra_items(Nidx, MaxItems, ItemIds) ->
@@ -208,7 +208,7 @@ parse_form(undefined) ->
     #{};
 parse_form(Form) ->
     IsForm = ?NS_XDATA == exml_query:attr(Form, <<"xmlns">>),
-    IsSubmit = <<"submit">> == exml_query:attr(Form, <<"type">>),
+    IsSubmit = <<"submit">> == exml_query:attr(Form, <<"type">>, <<"submit">>),
 
     FieldsXML = exml_query:subelements(Form, <<"field">>),
     Fields = [{exml_query:attr(Field, <<"var">>),

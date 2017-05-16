@@ -22,7 +22,7 @@
 %%% Message identifiers (or UIDs in the spec) are generated based on:
 %%%
 %%% <ul>
-%%% <li>date (using `now()');</li>
+%%% <li>date (using `timestamp()');</li>
 %%% <li>node number (using {@link ejabberd_node_id}).</li>
 %%% </ul>
 %%% @end
@@ -195,6 +195,15 @@ archive_id(Server, User)
 -spec start(Host :: ejabberd:server(), Opts :: list()) -> any().
 start(Host, Opts) ->
     ?DEBUG("mod_mam starting", []),
+    case gen_mod:get_opt(archive_groupchats, Opts, undefined) of
+        undefined ->
+            ?WARNING_MSG("mod_mam is enabled without explicit archive_groupchats option value."
+                         " It will default to `false` in one of future releases."
+                         " Please check the mod_mam documentation for more details.", []);
+        _ ->
+            ok
+    end,
+
     compile_params_module(Opts),
     ejabberd_users:start(Host),
     %% `parallel' is the only one recommended here.
@@ -294,11 +303,13 @@ user_send_packet(Acc, From, To, Packet) ->
 %% From and To are jid records.
 -type fpacket() :: {From :: ejabberd:jid(),
                     To :: ejabberd:jid(),
-                    Packet :: jlib:xmlel()}.
+                    Acc :: mongoose_acc:t()}.
 -spec filter_packet(Value :: fpacket() | drop) -> fpacket() | drop.
 filter_packet(drop) ->
     drop;
-filter_packet({From, To=#jid{luser=LUser, lserver=LServer}, Packet}) ->
+filter_packet({From, To=#jid{luser=LUser, lserver=LServer}, Acc}) ->
+    % let them to their amp-related mambo jumbo on stanza
+    Packet = mongoose_acc:get(to_send, Acc),
     ?DEBUG("Receive packet~n    from ~p ~n    to ~p~n    packet ~p.",
            [From, To, Packet]),
     {AmpEvent, PacketAfterArchive} =
@@ -318,14 +329,13 @@ filter_packet({From, To=#jid{luser=LUser, lserver=LServer}, Packet}) ->
                 end
         end,
     PacketAfterAmp = mod_amp:check_packet(PacketAfterArchive, From, AmpEvent),
-    {From, To, PacketAfterAmp}.
+    {From, To, mongoose_acc:put(to_send, PacketAfterAmp, Acc)}.
 
 process_incoming_packet(From, To, Packet) ->
     handle_package(incoming, true, To, From, From, Packet).
 
 %% @doc A ejabberd's callback with diferent order of arguments.
-%% #rh
--spec remove_user(map(), ejabberd:user(), ejabberd:server()) -> map().
+-spec remove_user(mongoose_acc:t(), ejabberd:user(), ejabberd:server()) -> mongoose_acc:t().
 remove_user(Acc, User, Server) ->
     delete_archive(Server, User),
     Acc.
@@ -664,12 +674,13 @@ determine_amp_strategy(Strategy, _, _, _, _) ->
                      LocJID :: ejabberd:jid(), RemJID :: ejabberd:jid(), SrcJID :: ejabberd:jid(),
                      Packet :: jlib:xmlel()) -> MaybeMessID :: binary() | undefined.
 handle_package(Dir, ReturnMessID,
-               LocJID=#jid{},
-               RemJID=#jid{},
-               SrcJID=#jid{}, Packet) ->
-    case mod_mam_params:is_archivable_message(?MODULE, Dir, Packet) of
+               LocJID = #jid{},
+               RemJID = #jid{},
+               SrcJID = #jid{}, Packet) ->
+    Host = server_host(LocJID),
+    case mod_mam_params:is_archivable_message(?MODULE, Dir, Packet)
+         andalso should_archive_if_groupchat(Host, exml_query:attr(Packet, <<"type">>)) of
         true ->
-            Host = server_host(LocJID),
             ArcID = archive_id_int(Host, LocJID),
             case is_interesting(Host, LocJID, RemJID, ArcID) of
                 true ->
@@ -683,6 +694,11 @@ handle_package(Dir, ReturnMessID,
         false ->
             undefined
     end.
+
+should_archive_if_groupchat(Host, <<"groupchat">>) ->
+    gen_mod:get_module_opt(Host, ?MODULE, archive_groupchats, true);
+should_archive_if_groupchat(_, _) ->
+    true.
 
 -spec return_external_message_id_if_ok(ReturnMessID :: boolean(),
                                        ArchivingResult :: ok | any(),

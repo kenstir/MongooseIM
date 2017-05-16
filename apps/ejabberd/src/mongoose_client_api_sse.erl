@@ -23,7 +23,7 @@ maybe_init(true, Req, #{jid := JID} = State) ->
     UUID = uuid:uuid_to_string(uuid:get_v4(), binary_standard),
     Resource = <<"sse-", UUID/binary>>,
 
-    ok = ejabberd_sm:open_session(SID, User, Server, Resource, 1, []),
+    ejabberd_sm:open_session(SID, User, Server, Resource, 1, []),
 
     {ok, Req, State#{sid => SID, jid => jid:replace_resource(JID, Resource)}};
 maybe_init(true, Req, State) ->
@@ -36,12 +36,16 @@ maybe_init({false, Value}, Req, State) ->
 handle_notify(_Msg, State) ->
     {nosend, State}.
 
-handle_info({route, _From, _To, #xmlel{name = <<"message">>} = Packet}, State) ->
-    Timestamp = usec:from_now(os:timestamp()),
-    Type = exml_query:attr(Packet, <<"type">>),
-    maybe_send_message_event(Type, Packet, Timestamp, State);
+handle_info({route, _From, _To, Acc}, State) ->
+    handle_msg(mongoose_acc:get(name, Acc), Acc, State);
 handle_info(_Msg, State) ->
     {nosend, State}.
+
+handle_msg(<<"message">>, Acc, State) ->
+    Timestamp = usec:from_now(os:timestamp()),
+    Type = mongoose_acc:get(type, Acc),
+    Packet = mongoose_acc:get(to_send, Acc),
+    maybe_send_message_event(Type, Packet, Timestamp, State).
 
 handle_error(_Msg, _Reson, State) ->
     {nosend, State}.
@@ -66,4 +70,3 @@ maybe_send_message_event(<<"groupchat">>, Packet, Timestamp, #{id := ID} = State
     {send, Event, State#{id := ID + 1}};
 maybe_send_message_event(_, _, _, State) ->
     {nosend, State}.
-

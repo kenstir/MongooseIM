@@ -36,7 +36,7 @@ Check out our test results:
 
 ## MongooseIM platform components
 
-<img src="MongooseIM_Platform_components.png" alt="MongooseIM platform schema" />
+<img src="MongooseIMPlatformcomponents.png" alt="MongooseIM platform schema" />
 
 
 ### Server-side components
@@ -47,9 +47,10 @@ We offer a set of server-side components:
 * Test suite - here are useful tools to test and validate your XMPP servers:
     * [escalus](https://github.com/esl/escalus): Erlang XMPP client
     * [amoc](https://github.com/esl/amoc): a load testing tools
+    * [exml](https://github.com/esl/exml): XML parsing library in Erlang
 * More components? There are some ideas we're working on. Tune in for updates on:
-    * Icicle: ICE, STUN/TRUN server
-    * Platypus: a push notification server
+    * MongooseICE: ICE, STUN/TRUN server
+    * MongoosePush: a push notification server
 
 ### Client-side components
 
@@ -60,6 +61,9 @@ We offer a set of server-side components:
 * REST API client libraries: we recommend following client libraries:
     * iOS, Swift: [Jayme](https://github.com/inaka/Jayme)
     * Android, Java: [Retrofit](https://github.com/square/retrofit)
+* Mangosta clients, for messaging, and social:
+    * iOS
+    * Android
 
 ## Participate!
 
@@ -77,8 +81,9 @@ Suggestions, questions, thoughts? Contact us directly:
 Up-to-date documentation for the MongooseIM master branch can be found on ReadTheDocs:
 
 * [http://mongooseim.readthedocs.org/en/latest/](http://mongooseim.readthedocs.org/en/latest/)
-* [release 2.0.0](http://mongooseim.readthedocs.org/en/2.0.0/)
+* [release 2.0.1](http://mongooseim.readthedocs.org/en/2.0.1/)
 * Older versions:
+    * [release 2.0.0](http://mongooseim.readthedocs.org/en/2.0.0/)
     * [release 1.6.2](http://mongooseim.readthedocs.org/en/1.6.2/)
     * [release 1.6.1](http://mongooseim.readthedocs.org/en/1.6.1/)
     * [release 1.6.0](http://mongooseim.readthedocs.org/en/1.6.0/)
@@ -122,6 +127,7 @@ The MongooseIM platform documentation:
     * [Reloading configuration on a running system](operation-and-maintenance/Reloading-configuration-on-a-running-system.md)
     * [Metrics](operation-and-maintenance/Mongoose-metrics.md)
     * [HTTP Administration API](http-api/http-administration-api-documentation.md)
+    * [Distribution over TLS](operation-and-maintenance/tls-distribution.md)
 * Server developer guide
     * [Testing MongooseIM](developers-guide/Testing-MongooseIM.md)
     * [REST Interface to Metrics](developers-guide/REST-interface-to-metrics.md)

@@ -42,6 +42,7 @@
          iq_query_or_response_info/1,
          iq_to_xml/1,
          parse_xdata_submit/1,
+         parse_xdata_fields/1,
          timestamp_to_xml/4,
          timestamp_to_mam_xml/4,
          timestamp_to_iso/2,
@@ -129,11 +130,15 @@ make_result_iq_reply_attrs(Attrs) ->
     [{<<"type">>, <<"result">>} | Attrs5].
 
 
--spec make_error_reply(xmlel(), xmlcdata() | xmlel()) -> xmlel().
+-spec make_error_reply(xmlel() | mongoose_acc:t(),
+                       xmlcdata() | xmlel()) ->
+    xmlel() | mongoose_acc:t().
 make_error_reply(#xmlel{name = Name, attrs = Attrs,
                         children = SubTags}, Error) ->
     NewAttrs = make_error_reply_attrs(Attrs),
-    #xmlel{name = Name, attrs = NewAttrs, children = SubTags ++ [Error]}.
+    #xmlel{name = Name, attrs = NewAttrs, children = SubTags ++ [Error]};
+make_error_reply(Acc, Error) ->
+    make_error_reply(mongoose_acc:get(to_send, Acc), Error).
 
 
 -spec make_error_reply_attrs([binary_pair()]) -> [binary_pair(), ...].
@@ -361,11 +366,16 @@ parse_xdata_submit(El) ->
     #xmlel{attrs = Attrs, children = Els} = El,
     case xml:get_attr_s(<<"type">>, Attrs) of
         <<"submit">> ->
-            lists:reverse(parse_xdata_fields(Els, []));
+            parse_xdata_fields(Els);
         _ ->
             invalid
     end.
 
+
+-spec parse_xdata_fields([xmlcdata() | xmlel()]) ->
+    [{binary(), [binary()]}].
+parse_xdata_fields(Els) ->
+    lists:reverse(parse_xdata_fields(Els, [])).
 
 -spec parse_xdata_fields([xmlcdata() | xmlel()], [{binary(), [binary()]}]) ->
     [{binary(), [binary()]}].

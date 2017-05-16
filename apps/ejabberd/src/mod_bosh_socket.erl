@@ -50,7 +50,7 @@
 -define(DEFAULT_MAXPAUSE, 120).
 -define(DEFAULT_CLIENT_ACKS, false).
 
--type cached_response() :: {rid(), erlang:timestamp(), jlib:xmlel()}.
+-type cached_response() :: {rid(), TStamp :: integer(), jlib:xmlel()}.
 -type rid() :: pos_integer().
 
 -record(state, {from            :: binary() | undefined,
@@ -465,10 +465,7 @@ maybe_diff(_, undefined) -> undefined;
 maybe_diff(Rid, Expected) -> abs(Rid-Expected).
 
 
--spec resend_cached({Rid :: pos_integer(),
-                     {non_neg_integer(), non_neg_integer(), non_neg_integer()},
-                     CachedBody :: jlib:xmlel()},
-                    state()) -> state().
+-spec resend_cached(cached_response(), state()) -> state().
 resend_cached({_Rid, _, CachedBody}, S) ->
     send_to_handler(CachedBody, S).
 
@@ -549,10 +546,8 @@ maybe_trim_cache(Ack, S) ->
 schedule_report(Ack, #state{sent = Sent} = S) ->
     ReportRid = Ack + 1,
     try
-        {resp,
-         {ReportRid, TimeSent, _}} = {resp, lists:keyfind(ReportRid, 1, Sent)},
-        ElapsedTimeMillis = erlang:round(timer:now_diff(now(), TimeSent)
-                                         / 1000),
+        {ReportRid, TimeSent, _} = lists:keyfind(ReportRid, 1, Sent),
+        ElapsedTimeMillis = p1_time_compat:monotonic_time(milli_seconds) - TimeSent,
         Report = {ReportRid, ElapsedTimeMillis},
         case S#state.report of
             false ->
@@ -628,36 +623,47 @@ is_acceptable_rid(Rid, ExpectedRid)
 is_acceptable_rid(_, _) ->
     false.
 
-%% @doc Send data to the client if any request handler is available.
+%% @doc Send data to the client if a request handler is available, that matches next RID.
 %% Otherwise, store for sending later.
 -spec send_or_store(_Data, state()) -> state().
 send_or_store(Data, State) when not is_list(Data) ->
     send_or_store([Data], State);
-send_or_store(Data, #state{handlers = []} = S) ->
-    store(Data, S);
 send_or_store(Data, State) ->
-    send_to_handler(Data, State).
+    case send_to_handler(Data, State) of
+        no_valid_handler ->
+            store(Data, State);
+        NewState ->
+            NewState
+    end.
 
 
 %% @doc send_to_handler() assumes that Handlers is not empty!
 %% Be sure that's the case if calling it.
--spec send_to_handler([any()] | jlib:xmlel(), state()) -> state().
+-spec send_to_handler([any()] | jlib:xmlel(), state()) -> state() | no_valid_handler.
 send_to_handler(Data, State) ->
-    {Handler, NS} = pick_handler(State),
-    send_to_handler(Handler, Data, NS).
+    case pick_handler(State) of
+        {Handler, NS} ->
+            send_to_handler(Handler, Data, NS);
+        false ->
+            no_valid_handler
+    end.
 
 
 %% Return handler and new state if a handler is available
 %% or `false` otherwise.
 -spec pick_handler(state()) -> {{rid(), pid()}, state()} | false.
-pick_handler(#state{handlers = []}) ->
+pick_handler(#state{ handlers = [] }) ->
     false;
-pick_handler(#state{handlers = Handlers} = S) ->
-    [{Rid, TRef, Pid} | HRest] = lists:sort(Handlers),
-    %% The cancellation might fail if the timer already fired.
-    %% Don't worry, it's handled on receiving the timeout message.
-    erlang:cancel_timer(TRef),
-    {{Rid, Pid}, S#state{handlers = HRest}}.
+pick_handler(#state{ handlers = Handlers, rid = Rid } = S) ->
+    case lists:sort(Handlers) of
+        [{HandlerRid, TRef, Pid} | HRest] when HandlerRid =< Rid->
+            %% The cancellation might fail if the timer already fired.
+            %% Don't worry, it's handled on receiving the timeout message.
+            erlang:cancel_timer(TRef),
+            {{HandlerRid, Pid}, S#state{handlers = HRest}};
+        _ ->
+            false
+    end.
 
 
 -spec send_to_handler({_, atom() | pid() | port() | {atom(), atom()}},
@@ -667,7 +673,7 @@ send_to_handler({_, Pid}, #xmlel{name = <<"body">>} = Wrapped, State) ->
     send_wrapped_to_handler(Pid, Wrapped, State);
 send_to_handler({Rid, Pid}, Data, State) ->
     {Wrapped, NS} = bosh_wrap(Data, Rid, State),
-    NS2 = cache_response({Rid, now(), Wrapped}, NS),
+    NS2 = cache_response({Rid, p1_time_compat:monotonic_time(milli_seconds), Wrapped}, NS),
     send_wrapped_to_handler(Pid, Wrapped, NS2).
 
 
@@ -705,7 +711,7 @@ maybe_report(#state{report = Report} = S) ->
     {NewAttrs, S#state{report = false}}.
 
 
--spec cache_response({rid(), erlang:timestamp(), jlib:xmlel()}, state()) -> state().
+-spec cache_response(cached_response(), state()) -> state().
 cache_response({Rid, _, _} = Response, #state{sent = Sent} = S) ->
     NewSent = lists:keymerge(1, [Response], Sent),
     CacheUpTo = case S#state.client_acks of
@@ -793,12 +799,13 @@ return_surplus_handlers(SName, #state{handlers = [_], pending = []} = State)
     when SName == normal; SName == closing ->
     State;
 return_surplus_handlers(accumulate, #state{handlers = _} = S) ->
-    NS = send_to_handler([], S),
-    return_surplus_handlers(accumulate, NS);
+    case send_to_handler([], S) of
+        no_valid_handler -> S;
+        NS -> return_surplus_handlers(accumulate, NS)
+    end;
 return_surplus_handlers(SName, #state{pending = Pending} = S)
     when SName == normal; SName == closing ->
-    NS = send_or_store(Pending, S#state{pending = []}),
-    return_surplus_handlers(normal, NS).
+    send_or_store(Pending, S#state{pending = []}).
 
 
 -spec bosh_unwrap(EventTag :: mod_bosh:event_type(), jlib:xmlel(), state())

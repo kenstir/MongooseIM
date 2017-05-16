@@ -35,7 +35,7 @@
 -export([init/3, terminate/2, options/0, features/0,
          create_node_permission/6, create_node/2, delete_node/1,
          purge_node/2, subscribe_node/8, unsubscribe_node/4,
-         publish_item/8, delete_item/4, remove_extra_items/3,
+         publish_item/9, delete_item/4, remove_extra_items/3,
          get_entity_affiliations/2, get_node_affiliations/1,
          get_affiliation/2, set_affiliation/3,
          get_entity_subscriptions/2, get_node_subscriptions/1,
@@ -49,7 +49,8 @@ init(Host, ServerHost, Opts) ->
     node_flat:init(Host, ServerHost, Opts),
     Owner = mod_pubsub:service_jid(Host),
     mod_pubsub:create_node(Host, ServerHost, <<"/home">>, Owner, <<"hometree">>),
-    mod_pubsub:create_node(Host, ServerHost, <<"/home/", ServerHost/binary>>, Owner, <<"hometree">>),
+    mod_pubsub:create_node(Host, ServerHost, <<"/home/", ServerHost/binary>>,
+                           Owner, <<"hometree">>),
     ok.
 
 terminate(Host, ServerHost) ->
@@ -68,23 +69,19 @@ features() ->
 %% <tt>access_createnode</tt> ACL value in ejabberd config file.</p>
 %% <p>This function also check that node can be created as a children of its
 %% parent node</p>
-create_node_permission(Host, ServerHost, Node, _ParentNode, Owner, Access) ->
-    LOwner = jid:to_lower(Owner),
-    {User, Server, _Resource} = LOwner,
-    Allowed = case LOwner of
-        {<<"">>, Host, <<"">>} ->
-            true; % pubsub service always allowed
-        _ ->
-            case acl:match_rule(ServerHost, Access, Owner) of
-                allow ->
-                    case node_to_path(Node) of
-                        [<<"home">>, Server, User | _] -> true;
-                        _ -> false
-                    end;
-                _ -> false
-            end
-    end,
-    {result, Allowed}.
+create_node_permission(Host, _ServerHost, _Node, _ParentNode,
+                       #jid{ luser = <<>>, lserver = Host, lresource = <<>> }, _Access) ->
+    {result, true}; % pubsub service always allowed
+create_node_permission(_Host, ServerHost, Node, _ParentNode,
+                       #jid{ luser = User, lserver = Server } = Owner, Access) ->
+    case acl:match_rule(ServerHost, Access, Owner) of
+        allow ->
+            case node_to_path(Node) of
+                [<<"home">>, Server, User | _] -> {result, true};
+                _ -> {result, false}
+            end;
+        _ -> {result, false}
+    end.
 
 create_node(Nidx, Owner) ->
     node_flat:create_node(Nidx, Owner).
@@ -101,8 +98,9 @@ subscribe_node(Nidx, Sender, Subscriber, AccessModel,
 unsubscribe_node(Nidx, Sender, Subscriber, SubId) ->
     node_flat:unsubscribe_node(Nidx, Sender, Subscriber, SubId).
 
-publish_item(Nidx, Publisher, Model, MaxItems, ItemId, ItemPublisher, Payload, PublishOptions) ->
-    node_flat:publish_item(Nidx, Publisher, Model, MaxItems, ItemId, ItemPublisher,
+publish_item(ServerHost, Nidx, Publisher, Model, MaxItems, ItemId, ItemPublisher, Payload,
+             PublishOptions) ->
+    node_flat:publish_item(ServerHost, Nidx, Publisher, Model, MaxItems, ItemId, ItemPublisher,
                            Payload, PublishOptions).
 
 remove_extra_items(Nidx, MaxItems, ItemIds) ->

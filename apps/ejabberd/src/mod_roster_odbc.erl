@@ -12,6 +12,7 @@
 -module(mod_roster_odbc).
 -include("mod_roster.hrl").
 -include("jlib.hrl").
+-include("ejabberd.hrl").
 
 -behaviour(mod_roster).
 
@@ -21,14 +22,16 @@
          read_roster_version/2,
          write_roster_version/4,
          get_roster/2,
-         get_roster_by_jid_t/3,
+         get_roster_entry/3,
+         get_roster_entry/4,
+         get_roster_entry_t/3,
+         get_roster_entry_t/4,
          get_subscription_lists/3,
          roster_subscribe_t/4,
-         get_roster_by_jid_with_groups_t/3,
          update_roster_t/4,
          remove_user/2,
-         del_roster_t/3,
-         read_subscription_and_groups/3]).
+         del_roster_t/3
+         ]).
 
 -export([raw_to_record/2]).
 
@@ -54,14 +57,15 @@ read_roster_version(LUser, LServer) ->
 write_roster_version(LUser, LServer, InTransaction, Ver) ->
     Username = mongoose_rdbms:escape(LUser),
     EVer = mongoose_rdbms:escape(Ver),
-    if InTransaction ->
-           rdbms_queries:set_roster_version(Username, EVer);
-       true ->
-           rdbms_queries:sql_transaction(LServer,
-                                        fun () ->
-                                                rdbms_queries:set_roster_version(Username,
-                                                                                EVer)
-                                        end)
+    case InTransaction of
+        true ->
+            rdbms_queries:set_roster_version(Username, EVer);
+        _ ->
+            rdbms_queries:sql_transaction(LServer,
+                                          fun () ->
+                                                  rdbms_queries:set_roster_version(Username,
+                                                                                   EVer)
+                                          end)
     end.
 
 get_roster(LUser, LServer) ->
@@ -84,48 +88,78 @@ get_roster(LUser, LServer) ->
                                      end,
                                      dict:new(), JIDGroups),
             RItems = lists:flatmap(fun (I) ->
-                                           case raw_to_record(LServer, I) of
-                                               %% Bad JID in database:
-                                               error -> [];
-                                               R ->
-                                                   SJID =
-                                                   jid:to_binary(R#roster.jid),
-                                                   Groups = case dict:find(SJID,
-                                                                           GroupsDict)
-                                                            of
-                                                                {ok, Gs} -> Gs;
-                                                                error -> []
-                                                            end,
-                                                   [R#roster{groups = Groups}]
-                                           end
+                                          raw_to_record_with_group(LServer, I, GroupsDict)
                                    end,
                                    Items),
             RItems;
         _ -> []
     end.
 
-get_roster_by_jid_t(LUser, LServer, LJID) ->
+raw_to_record_with_group(LServer, I, GroupsDict) ->
+    case raw_to_record(LServer, I) of
+        %% Bad JID in database:
+        error -> [];
+        R ->
+            SJID = jid:to_binary(R#roster.jid),
+            Groups = case dict:find(SJID, GroupsDict) of
+                         {ok, Gs} -> Gs;
+                         error -> []
+                     end,
+            [R#roster{groups = Groups}]
+    end.
+
+rdbms_q(Funcname, Args) ->
+    apply(rdbms_queries, Funcname, Args).
+
+get_roster_entry(LUser, LServer, LJID) ->
+    do_get_roster_entry(LUser, LServer, LJID, get_roster_by_jid).
+
+get_roster_entry_t(LUser, LServer, LJID) ->
+    do_get_roster_entry(LUser, LServer, LJID, get_roster_by_jid_t).
+
+do_get_roster_entry(LUser, LServer, LJID, FuncName) ->
     Username = mongoose_rdbms:escape(LUser),
     SJID = mongoose_rdbms:escape(jid:to_binary(LJID)),
     {selected,
-     Res} =
-    rdbms_queries:get_roster_by_jid(LServer, Username, SJID),
+        Res} = rdbms_q(FuncName, [LServer, Username, SJID]),
     case Res of
         [] ->
-            #roster{usj = {LUser, LServer, LJID},
-                    us = {LUser, LServer}, jid = LJID};
+            does_not_exist;
         [I] ->
             R = raw_to_record(LServer, I),
             case R of
                 %% Bad JID in database:
                 error ->
                     #roster{usj = {LUser, LServer, LJID},
-                            us = {LUser, LServer}, jid = LJID};
+                        us = {LUser, LServer}, jid = LJID};
                 _ ->
                     R#roster{usj = {LUser, LServer, LJID},
-                             us = {LUser, LServer}, jid = LJID, name = <<"">>}
+                        us = {LUser, LServer}, jid = LJID, name = <<"">>}
             end
     end.
+
+get_roster_entry(LUser, LServer, LJID, full) ->
+    case get_roster_entry(LUser, LServer, LJID) of
+        does_not_exist -> does_not_exist;
+        Rentry ->
+            case read_subscription_and_groups(LUser, LServer, LJID) of
+                error -> error;
+                {Subscription, Groups} ->
+                    Rentry#roster{subscription = Subscription, groups = Groups}
+            end
+    end.
+
+get_roster_entry_t(LUser, LServer, LJID, full) ->
+    case get_roster_entry_t(LUser, LServer, LJID) of
+        does_not_exist -> does_not_exist;
+        Rentry ->
+        case read_subscription_and_groups_t(LUser, LServer, LJID) of
+            error -> error;
+            {Subscription, Groups} ->
+                Rentry#roster{subscription = Subscription, groups = Groups}
+        end
+    end.
+
 
 get_subscription_lists(_, LUser, LServer) ->
     Username = mongoose_rdbms:escape(LUser),
@@ -143,29 +177,6 @@ roster_subscribe_t(LUser, LServer, LJID, Item) ->
     SJID = mongoose_rdbms:escape(jid:to_binary(LJID)),
     rdbms_queries:roster_subscribe(LServer, Username, SJID,
                                   ItemVals).
-
-get_roster_by_jid_with_groups_t(LUser, LServer, LJID) ->
-    Username = mongoose_rdbms:escape(LUser),
-    SJID = mongoose_rdbms:escape(jid:to_binary(LJID)),
-    case rdbms_queries:get_roster_by_jid(LServer, Username,
-                                        SJID)
-    of
-        {selected,
-         [I]} ->
-            R = raw_to_record(LServer, I),
-            Groups = case rdbms_queries:get_roster_groups(LServer,
-                                                         Username, SJID)
-                     of
-                         {selected, JGrps} when is_list(JGrps) ->
-                             [JGrp || {JGrp} <- JGrps];
-                         _ -> []
-                     end,
-            R#roster{groups = Groups};
-        {selected,
-         []} ->
-            #roster{usj = {LUser, LServer, LJID},
-                    us = {LUser, LServer}, jid = LJID}
-    end.
 
 remove_user(LUser, LServer) ->
     Username = mongoose_rdbms:escape(LUser),
@@ -211,11 +222,19 @@ raw_to_record(LServer,
                     askmessage = SAskMessage}
     end.
 
+
 read_subscription_and_groups(LUser, LServer, LJID) ->
+    read_subscription_and_groups(LUser, LServer, LJID, get_subscription,
+        get_rostergroup_by_jid).
+
+read_subscription_and_groups_t(LUser, LServer, LJID) ->
+    read_subscription_and_groups(LUser, LServer, LJID, get_subscription_t,
+                                 get_rostergroup_by_jid_t).
+
+read_subscription_and_groups(LUser, LServer, LJID, GSFunc, GRFunc) ->
     Username = mongoose_rdbms:escape(LUser),
     SJID = mongoose_rdbms:escape(jid:to_binary(LJID)),
-    case catch rdbms_queries:get_subscription(LServer,
-                                             Username, SJID)
+    case catch rdbms_q(GSFunc, [LServer, Username, SJID])
     of
         {selected, [{SSubscription}]} ->
             Subscription = case SSubscription of
@@ -224,16 +243,16 @@ read_subscription_and_groups(LUser, LServer, LJID) ->
                                <<"F">> -> from;
                                _ -> none
                            end,
-            Groups = case catch
-                          rdbms_queries:get_rostergroup_by_jid(LServer, Username,
-                                                              SJID)
+            Groups = case catch rdbms_q(GRFunc, [LServer, Username, SJID])
                      of
                          {selected, JGrps} when is_list(JGrps) ->
                              [JGrp || {JGrp} <- JGrps];
                          _ -> []
                      end,
             {Subscription, Groups};
-        _ -> error
+        E ->
+            ?ERROR_MSG("Error calling rdbms backend: ~p~n", [E]),
+            error
     end.
 
 %%==============================================================================
